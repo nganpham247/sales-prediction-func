@@ -97,6 +97,9 @@ def _background_load():
     """Runs in a daemon thread to initialize Spark, the model, and SHAP."""
     global spark, model, gbt_model, assembler, explainer, feature_names, model_metrics, _loaded
     try:
+        # Download model from Azure Storage
+        if not download_model_from_storage():
+            raise RuntimeError("Failed to download model files")
         findspark.init()
         from pyspark.sql import SparkSession
         from pyspark.ml import PipelineModel
