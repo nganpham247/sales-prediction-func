@@ -5,3 +5,4 @@ pyspark
 shap
 azure-functions
 azure-storage-blob>=12.0.0
+azure-identity
