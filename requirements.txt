@@ -3,3 +3,4 @@ uvicorn[standard]
 findspark
 pyspark
 shap
+azure-functions
