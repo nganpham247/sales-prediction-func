@@ -4,6 +4,7 @@ import findspark
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict
+from azure.storage.blob import BlobServiceClient
 
 app = FastAPI(title="Sales Prediction w/ Background Load")
 
@@ -13,8 +14,77 @@ feature_names = model_metrics = None
 _loaded = False
 
 # Paths (exactly as mounted in Colab)
-MODEL_PATH   = "/content/drive/My Drive/ThesisData/saved_models2/complete_sales_model"
-METRICS_PATH = "/content/drive/My Drive/ThesisData/saved_models2/results/metrics.json"
+MODEL_PATH = os.environ.get("MODEL_PATH", "/tmp/model")
+METRICS_PATH = os.environ.get("METRICS_PATH", "/tmp/metrics.json")
+# Add these imports
+from azure.storage.blob import BlobServiceClient
+from azure.identity import DefaultAzureCredential
+import os, tempfile, zipfile, shutil, glob, traceback
+
+# ─── Configuration ─────────────────────────────────────────────────────────────
+# (Set these in your Function App settings or local env)
+STORAGE_ACCOUNT_NAME = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME", "mymlstorage1")
+# If you prefer connection strings, set AZURE_STORAGE_CONNECTION_STRING (or use AzureWebJobsStorage)
+STORAGE_CONNECTION_STRING = (
+    os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    or os.environ.get("AzureWebJobsStorage")
+    or None
+)
+CONTAINER_NAME = os.environ.get("MODEL_CONTAINER", "models")
+
+# Local paths
+MODEL_PATH   = os.environ.get("MODEL_PATH",   "/tmp/model")
+METRICS_PATH = os.environ.get("METRICS_PATH", "/tmp/metrics.json")
+
+
+def download_and_extract_model():
+    try:
+        # ─── Create BlobServiceClient ─────────────────────────────────────────────
+        if STORAGE_CONNECTION_STRING:
+            blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+        else:
+            account_url = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+            credential  = DefaultAzureCredential()
+            blob_service = BlobServiceClient(account_url=account_url, credential=credential)
+
+        container_client = blob_service.get_container_client(CONTAINER_NAME)
+
+        # ─── Download & extract both ZIPs ────────────────────────────────────────
+        tmp_dir = tempfile.gettempdir()
+        downloads = {
+            "model":   "complete_sales_model-20250419T055616Z-001.zip",
+            "results": "results-20250419T120204Z-001.zip"
+        }
+
+        for key, blob_name in downloads.items():
+            zip_path = os.path.join(tmp_dir, blob_name)
+            blob = container_client.get_blob_client(blob_name)
+            with open(zip_path, "wb") as f:
+                f.write(blob.download_blob().readall())
+
+            extract_to = (
+                os.path.dirname(MODEL_PATH)
+                if key == "model"
+                else os.path.join(tmp_dir, "results")
+            )
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(extract_to)
+
+        # ─── Locate and copy metrics.json ───────────────────────────────────────
+        candidates = glob.glob(os.path.join(tmp_dir, "results", "**", "metrics.json"), recursive=True)
+        if candidates:
+            os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)
+            shutil.copy2(candidates[0], METRICS_PATH)
+        else:
+            print("⚠️  metrics.json not found in results archive")
+
+        print("✅ Downloaded and extracted model files from Azure Storage")
+        return True
+
+    except Exception as e:
+        print(f"❌ Failed to download and extract model files: {e}")
+        traceback.print_exc()
+        return False
 
 class PredictionRequest(BaseModel):
     year: int; month: int; day: int
